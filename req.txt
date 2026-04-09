@@ -1,0 +1,5 @@
+1. Nghiên cứu và cài đặt cơ chế đồng bộ thời gian trong hệ thống phân tán (NTP & Logical Clock)
+2. So sánh đồng hồ logic Lamport và Vector Clock trong hệ thống phân tán
+3. Mô phỏng và đánh giá sai lệch thời gian trong hệ thống phân tán
+
+1 máy làm server 4 máy client rồi dùng các thuật toán đồng hồ để đồng bộ thời gian rồi so sánh chúng

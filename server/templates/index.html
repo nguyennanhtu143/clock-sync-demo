@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Distributed Time Sync — Dashboard</title>
+    <meta name="description" content="Dashboard giám sát đồng bộ thời gian trong hệ thống phân tán: NTP, Lamport Clock, Vector Clock">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <!-- ═══════ Header ═══════ -->
+    <header id="header">
+        <div class="header-left">
+            <div class="logo">
+                <span class="logo-icon">⏱</span>
+                <div>
+                    <h1>Distributed Time Sync</h1>
+                    <p class="subtitle">NTP • Lamport Clock • Vector Clock</p>
+                </div>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="status-badge" id="statusBadge">
+                <span class="status-dot"></span>
+                <span class="status-text">Online</span>
+            </div>
+            <div class="server-time" id="serverTime">--:--:--</div>
+        </div>
+    </header>
+
+    <!-- ═══════ Tab Navigation ═══════ -->
+    <nav id="tabNav" class="tab-nav">
+        <button class="tab-btn active" data-tab="ntp" id="tabNTP">
+            <span class="tab-icon">🔄</span>
+            NTP Sync
+            <span class="tab-badge" id="ntpBadge">0</span>
+        </button>
+        <button class="tab-btn" data-tab="logic" id="tabLogic">
+            <span class="tab-icon">🧠</span>
+            Logical Clocks
+            <span class="tab-badge" id="logicBadge">0</span>
+        </button>
+        <button class="tab-btn" data-tab="compare" id="tabCompare">
+            <span class="tab-icon">📊</span>
+            So sánh
+        </button>
+    </nav>
+
+    <!-- ═══════ Main Content ═══════ -->
+    <main id="mainContent">
+
+        <!-- ═══ NTP Tab ═══ -->
+        <section class="tab-content active" id="ntpSection">
+            <!-- Stats Cards -->
+            <div class="stats-grid">
+                <div class="stat-card" id="statNodes">
+                    <div class="stat-icon">🖥️</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="syncedNodes">0</span>
+                        <span class="stat-label">Nodes Synced</span>
+                    </div>
+                </div>
+                <div class="stat-card" id="statAvgDelay">
+                    <div class="stat-icon">📡</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="avgDelay">—</span>
+                        <span class="stat-label">Avg Delay</span>
+                    </div>
+                </div>
+                <div class="stat-card" id="statAvgOffset">
+                    <div class="stat-icon">⏳</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="avgOffset">—</span>
+                        <span class="stat-label">Avg Offset</span>
+                    </div>
+                </div>
+                <div class="stat-card" id="statAccuracy">
+                    <div class="stat-icon">🎯</div>
+                    <div class="stat-info">
+                        <span class="stat-value" id="avgAccuracy">—</span>
+                        <span class="stat-label">Avg Remaining Error</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Charts Row -->
+            <div class="charts-grid">
+                <div class="chart-card">
+                    <h3 class="chart-title">Fake Offset vs Calculated Offset</h3>
+                    <p class="chart-subtitle">So sánh độ lệch giả và offset NTP tính toán được</p>
+                    <div class="chart-container">
+                        <canvas id="ntpOffsetChart"></canvas>
+                    </div>
+                </div>
+                <div class="chart-card">
+                    <h3 class="chart-title">Network Delay (RTT/2)</h3>
+                    <p class="chart-subtitle">Độ trễ mạng đo được cho mỗi client</p>
+                    <div class="chart-container">
+                        <canvas id="ntpDelayChart"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <!-- NTP Results Table -->
+            <div class="table-card">
+                <h3 class="chart-title">Chi tiết kết quả NTP Sync</h3>
+                <div class="table-wrapper">
+                    <table id="ntpTable">
+                        <thead>
+                            <tr>
+                                <th>Node</th>
+                                <th>Fake Offset</th>
+                                <th>T1 (Client gửi)</th>
+                                <th>T2 (Server nhận)</th>
+                                <th>T3 (Server gửi)</th>
+                                <th>T4 (Client nhận)</th>
+                                <th>Delay (δ)</th>
+                                <th>Offset (θ)</th>
+                                <th>Error còn lại</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ntpTableBody">
+                            <tr class="empty-row">
+                                <td colspan="10">Chưa có dữ liệu. Chờ các Client thực hiện NTP sync...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Logical Clocks Tab ═══ -->
+        <section class="tab-content" id="logicSection">
+            <!-- Timeline Diagram -->
+            <div class="chart-card full-width">
+                <h3 class="chart-title">Space-Time Diagram</h3>
+                <p class="chart-subtitle">Biểu đồ không-thời gian hiển thị sự kiện và message giữa các Node</p>
+                <div class="timeline-container">
+                    <canvas id="timelineDiagram"></canvas>
+                </div>
+            </div>
+
+            <!-- Events Table -->
+            <div class="table-card">
+                <h3 class="chart-title">Bảng sự kiện — Lamport vs Vector Clock</h3>
+                <div class="table-wrapper">
+                    <table id="logicTable">
+                        <thead>
+                            <tr>
+                                <th>#</th>
+                                <th>Thời gian</th>
+                                <th>Node</th>
+                                <th>Sự kiện</th>
+                                <th>Chi tiết</th>
+                                <th>Lamport Clock</th>
+                                <th>Vector Clock</th>
+                            </tr>
+                        </thead>
+                        <tbody id="logicTableBody">
+                            <tr class="empty-row">
+                                <td colspan="7">Chưa có sự kiện. Chờ các Client tạo sự kiện Logical Clock...</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- ═══ Comparison Tab ═══ -->
+        <section class="tab-content" id="compareSection">
+            <div class="compare-grid">
+                <div class="compare-card">
+                    <div class="compare-header lamport">
+                        <h3>Lamport Clock</h3>
+                        <span class="compare-badge">Logical</span>
+                    </div>
+                    <div class="compare-body">
+                        <div class="compare-item">
+                            <span class="compare-label">Loại</span>
+                            <span class="compare-value">Scalar (1 số nguyên)</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Happened-before</span>
+                            <span class="compare-value highlight-yes">✓ Hỗ trợ (1 chiều)</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Concurrent detection</span>
+                            <span class="compare-value highlight-no">✗ Không phát hiện</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Kích thước</span>
+                            <span class="compare-value">O(1)</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Quy tắc Send</span>
+                            <span class="compare-value code">LC += 1; send(LC)</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Quy tắc Receive</span>
+                            <span class="compare-value code">LC = max(LC, recv_LC) + 1</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Ưu điểm</span>
+                            <span class="compare-value">Đơn giản, overhead thấp</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Nhược điểm</span>
+                            <span class="compare-value">Không phân biệt được concurrent events</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="compare-card">
+                    <div class="compare-header vector">
+                        <h3>Vector Clock</h3>
+                        <span class="compare-badge">Logical</span>
+                    </div>
+                    <div class="compare-body">
+                        <div class="compare-item">
+                            <span class="compare-label">Loại</span>
+                            <span class="compare-value">Vector (mảng N phần tử)</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Happened-before</span>
+                            <span class="compare-value highlight-yes">✓ Hỗ trợ (đầy đủ)</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Concurrent detection</span>
+                            <span class="compare-value highlight-yes">✓ Phát hiện được</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Kích thước</span>
+                            <span class="compare-value">O(N) — N = số node</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Quy tắc Send</span>
+                            <span class="compare-value code">VC[self]++; send(VC)</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Quy tắc Receive</span>
+                            <span class="compare-value code">VC[i]=max(VC[i],recv[i])∀i; VC[self]++</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Ưu điểm</span>
+                            <span class="compare-value">Xác định hoàn toàn thứ tự nhân quả</span>
+                        </div>
+                        <div class="compare-item">
+                            <span class="compare-label">Nhược điểm</span>
+                            <span class="compare-value">Overhead tăng theo số node O(N)</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="compare-card full-width">
+                    <div class="compare-header ntp-header">
+                        <h3>NTP (Network Time Protocol)</h3>
+                        <span class="compare-badge physical">Physical</span>
+                    </div>
+                    <div class="compare-body">
+                        <div class="compare-row">
+                            <div class="compare-item">
+                                <span class="compare-label">Loại đồng hồ</span>
+                                <span class="compare-value">Đồng hồ VẬT LÝ (Wall Clock)</span>
+                            </div>
+                            <div class="compare-item">
+                                <span class="compare-label">Mục đích</span>
+                                <span class="compare-value">Đồng bộ thời gian thực giữa các máy</span>
+                            </div>
+                            <div class="compare-item">
+                                <span class="compare-label">Công thức Delay</span>
+                                <span class="compare-value code">δ = ((T2-T1) + (T4-T3)) / 2</span>
+                            </div>
+                            <div class="compare-item">
+                                <span class="compare-label">Công thức Offset</span>
+                                <span class="compare-value code">θ = ((T2-T1) - (T4-T3)) / 2</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Live Comparison from events -->
+            <div class="chart-card full-width" id="concurrentCard" style="display:none;">
+                <h3 class="chart-title">🔍 Concurrent Events Detection</h3>
+                <p class="chart-subtitle">Sự kiện mà Lamport Clock không phân biệt được nhưng Vector Clock phát hiện là concurrent</p>
+                <div id="concurrentList" class="concurrent-list"></div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/static/js/dashboard.js"></script>
+</body>
+</html>
