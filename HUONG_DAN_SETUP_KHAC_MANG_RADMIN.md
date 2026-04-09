@@ -134,7 +134,19 @@ Trên **máy Server**, mở PowerShell/CMD:
 
 ```bash
 cd d:\HTPT\server
+
+# Nếu lỡ copy thư mục venv từ máy khác sang thì xóa đi: rmdir /s /q venv
+
+# Tạo venv MỚI trên máy này (chỉ cần làm 1 lần)
+python -m venv venv
+
+# Kích hoạt
 venv\Scripts\activate
+
+# Cài đặt
+pip install -r requirements.txt
+
+# Chạy server
 python dashboard.py
 ```
 
@@ -161,7 +173,11 @@ Trên **mỗi máy Client**:
 
 ```bash
 cd d:\HTPT\client
+
+# Tạo venv MỚI trên máy này (chỉ cần làm 1 lần)
+python -m venv venv
 venv\Scripts\activate
+pip install -r requirements.txt
 
 # ⚠️ DÙNG IP RADMIN CỦA SERVER (không phải IP WiFi)
 python ntp_client.py --server-ip 26.55.10.1 --node-id 1

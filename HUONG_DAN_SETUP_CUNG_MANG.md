@@ -75,7 +75,19 @@ Trên **máy Server**, mở PowerShell/CMD:
 
 ```bash
 cd d:\HTPT\server
+
+# Nếu lỡ copy thư mục venv từ máy khác sang thì xóa đi: rmdir /s /q venv
+
+# Tạo venv MỚI trên máy này (chỉ cần làm 1 lần)
+python -m venv venv
+
+# Kích hoạt venv
 venv\Scripts\activate
+
+# Cài đặt thư viện
+pip install -r requirements.txt
+
+# Khởi động hệ thống
 python dashboard.py
 ```
 
@@ -101,7 +113,11 @@ Trên **mỗi máy Client**, mở PowerShell/CMD:
 
 ```bash
 cd d:\HTPT\client
+
+# Tạo venv MỚI trên máy này (chỉ cần làm 1 lần)
+python -m venv venv
 venv\Scripts\activate
+pip install -r requirements.txt
 
 # Thay 192.168.1.100 bằng IP thực của Server
 # Thay --node-id bằng số khác nhau cho mỗi máy (1, 2, 3, 4)
