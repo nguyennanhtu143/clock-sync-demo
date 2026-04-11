@@ -146,9 +146,13 @@ def api_ntp_results():
 
 @app.route("/api/logic/events")
 def api_logic_events():
-    """Trả về tất cả sự kiện Logic"""
-    with logic_lock:
-        return jsonify(list(logic_events))
+    """Trả về tất cả sự kiện Logic — đọc từ logic_server"""
+    try:
+        import logic_server as ls
+        return jsonify(ls.get_logic_events())
+    except Exception:
+        with logic_lock:
+            return jsonify(list(logic_events))
 
 
 # ═══════════════════════════════════════════════
@@ -166,10 +170,12 @@ def start_ntp_server_thread():
 
 
 def start_logic_server_thread():
-    """Chạy Logic Server trong thread riêng"""
+    """Chạy Logic Server trong thread riêng và đăng ký emit callback"""
     sys.path.insert(0, os.path.dirname(__file__))
-    from logic_server import start_server as logic_start
-    thread = threading.Thread(target=logic_start, daemon=True)
+    import logic_server as ls
+    # Đăng ký socketio.emit làm callback — logic_server sẽ gọi khi có sự kiện mới
+    ls.set_emit_callback(socketio.emit)
+    thread = threading.Thread(target=ls.start_server, daemon=True)
     thread.start()
     log("INFO", f"Logic Server đã khởi động trên {Fore.GREEN}Port 5001{Style.RESET_ALL}")
     return thread

@@ -24,6 +24,15 @@ logic_lock = threading.Lock()
 connected_nodes = {}
 node_connections = {}  # node_id -> conn
 
+# Callback để emit SocketIO — được set bởi dashboard.py
+_emit_callback = None
+
+
+def set_emit_callback(callback):
+    """Dashboard gọi hàm này để đăng ký callback emit SocketIO"""
+    global _emit_callback
+    _emit_callback = callback
+
 
 def get_timestamp():
     return time.time()
@@ -62,11 +71,17 @@ def print_banner():
 
 
 def record_event(event_data):
-    """Lưu sự kiện cho dashboard"""
+    """Lưu sự kiện cho dashboard và emit real-time"""
     with logic_lock:
         event_data["timestamp"] = time.time()
         event_data["time_str"] = format_time(time.time())
         logic_events.append(event_data)
+    # Emit real-time đến browser qua SocketIO (nếu callback đã được set)
+    if _emit_callback:
+        try:
+            _emit_callback("logic_update", dict(event_data))
+        except Exception as e:
+            log("ERROR", f"Emit callback lỗi: {e}")
 
 
 def get_logic_events():
