@@ -134,9 +134,72 @@ python ntp_client.py --server-ip 192.168.1.100 --node-id 1
 
 Khi thấy `Nhấn Enter để bắt đầu đồng bộ NTP...` → người điều phối hô "bắt đầu" → tất cả nhấn Enter.
 
+
 ---
 
-## Bước 6: Chạy Logical Clock Client (trên 4 máy Client)
+## Bước 6: Chạy Berkeley Client (trên 4 máy Client)
+
+Sau khi demo NTP (Cristian) xong, chạy Berkeley để xem thuật toán đồng bộ tập trung:
+
+```bash
+# Mỗi máy Client mở một cửa sổ CMD mới (vẫn trong thư mục client, venv đã kích hoạt)
+# Thay 192.168.1.100 bằng IP thực của Server
+# Thay --node-id bằng số khác nhau cho mỗi máy (1, 2, 3, 4)
+python berkeley_client.py --server-ip 192.168.1.100 --node-id 1
+```
+
+**Phân chia node-id:**
+| Máy       | Lệnh                                                                    |
+|-----------|-------------------------------------------------------------------------|
+| Client 1  | `python berkeley_client.py --server-ip 192.168.1.100 --node-id 1`      |
+| Client 2  | `python berkeley_client.py --server-ip 192.168.1.100 --node-id 2`      |
+| Client 3  | `python berkeley_client.py --server-ip 192.168.1.100 --node-id 3`      |
+| Client 4  | `python berkeley_client.py --server-ip 192.168.1.100 --node-id 4`      |
+
+Khi thấy `Đang chờ Berkeley Server poll...` → Tất cả 4 Client đã sẵn sàng.
+
+### Kích hoạt vòng đồng bộ Berkeley
+
+Sau khi tất cả Client kết nối, có 2 cách trigger Server chạy vòng đồng bộ:
+
+**Cách 1 — Từ Dashboard (khuyến khích khi demo):**
+Mở browser tại `http://192.168.1.100:8080` và nhấn nút **"Trigger Berkeley Round"** (nếu Dashboard có hỗ trợ giao diện).
+
+**Cách 2 — Từ Terminal trên máy Server:**
+```bash
+# Trên máy Server, mở cửa sổ CMD mới
+curl -X POST http://localhost:8080/api/berkeley/trigger
+```
+Hoặc dùng PowerShell:
+```powershell
+Invoke-WebRequest -Method POST -Uri http://localhost:8080/api/berkeley/trigger
+```
+
+**Cách 3 — Từ bất kỳ máy nào trong mạng:**
+```bash
+curl -X POST http://192.168.1.100:8080/api/berkeley/trigger
+```
+
+### Quan sát kết quả
+
+Sau khi trigger, mỗi Client sẽ in ra kết quả điều chỉnh:
+```
+--- KẾT QUẢ ĐIỀU CHỈNH BERKELEY Node 1 ---
+  Điều chỉnh nhận được (adj)     : -5.400000s
+  Thời gian TRƯỚC điều chỉnh     : 15:30:05.000
+  Thời gian SAU  điều chỉnh      : 15:29:59.600
+  Sai lệch còn lại               : 400.000ms
+```
+
+Dashboard tại `http://192.168.1.100:8080` sẽ hiển thị kết quả real-time.
+
+---
+
+## Bước 7: Chạy Logical Clock Client (trên 4 máy Client)
+
+---
+
+## Bước 7: Chạy Logical Clock Client (trên 4 máy Client)
 
 Sau khi demo NTP xong, chạy Logical Clock:
 

@@ -250,13 +250,180 @@ Vector Clock là cách duy nhất để phát hiện điều này. Dashboard có
 
 ---
 
+## 3. `berkeley_client.py` — Berkeley Client
+
+### Tham số dòng lệnh
+
+```bash
+python berkeley_client.py --server-ip 192.168.1.100 --node-id 1 [--fake-offset 5.2]
+```
+
+| Tham số | Bắt buộc | Mô tả |
+|---|---|---|
+| `--server-ip` | ✅ | IP của máy Server (Berkeley Server Port 5002) |
+| `--node-id` | ✅ | ID node: 1, 2, 3 hoặc 4 |
+| `--fake-offset` | ❌ | Độ lệch giả (giây). Nếu không truyền → random trong [-10, +10] |
+
+### Sự khác biệt cốt lõi với NTP Client
+
+| Đặc điểm | NTP Client (Cristian) | Berkeley Client |
+|---|---|---|
+| Ai khởi động đồng bộ | **Client** chủ động kết nối | **Client** chờ Server gọi |
+| Thời gian chạy kết nối | Ngắn (1 request rồi đóng) | Dài (TCP mở suốt phiên làm việc) |
+| Nhận kết quả | Tính toán tại Client | Nhận adjustment từ Server |
+| Tham chiếu thời gian | Server là chuẩn | Trung bình tất cả node |
+
+### Luồng thực thi chi tiết
+
+#### Bước 1 — Khởi tạo và hiển thị trạng thái ban đầu
+
+```python
+client = BerkeleyClient(server_ip, node_id, fake_offset)
+# Đồng hồ cục bộ giả lập:
+# my_clock() = time.time() + fake_offset + offset_accumulated
+#                                  ↑                  ↑
+#                        lệch ban đầu      tổng adj đã nhận (=0 ban đầu)
+```
+
+Console hiển thị:
+```
+  Server      : 192.168.1.100:5002
+  Fake Offset : +5.000s
+  Thời gian OS: 15:30:00.000
+  Đồng hồ CL  : 15:30:05.000 (CHƯA ĐỒNG BỘ)
+```
+
+#### Bước 2 — Kết nối và đăng ký
+
+```python
+sock.connect((server_ip, 5002))
+send({"type": "register", "node_id": 1, "fake_offset": 5.0})
+```
+
+Sau khi nhận `{"type": "registered"}` → Client mở vòng lặp `run()` chờ message từ Server. Kết nối TCP được **giữ mở liên tục**.
+
+#### Bước 3 — Phản hồi POLL (handle_poll)
+
+Khi Server gửi POLL, Client phải phản hồi **càng nhanh càng tốt** để RTT measurement của Server chính xác:
+
+```python
+def handle_poll(self, msg):
+    t_client = self.my_clock()          # Đọc đồng hồ ngay lập tức
+    self._send({"type": "poll_response", "client_time": t_client})
+```
+
+Tại sao lại gửi `my_clock()` chứ không phải `time.time()`?
+Vì `my_clock()` là đồng hồ "Client đang sống" — đã bao gồm `fake_offset` và các điều chỉnh trước đó. Server cần biết thời gian thực sự mà Client đang dùng.
+
+#### Bước 4 — Nhận và áp dụng ADJUST (handle_adjust)
+
+```python
+def handle_adjust(self, msg):
+    adjustment = msg["adjustment"]
+    t_before = self.my_clock()
+    self.offset_accumulated += adjustment   # ← Áp dụng điều chỉnh
+    t_after = self.my_clock()
+```
+
+**Cách mô phỏng điều chỉnh đồng hồ:**
+```
+my_clock() = time.time() + fake_offset + offset_accumulated
+
+Sau khi nhận adj:
+  offset_accumulated += adj
+  → my_clock() dịch chuyển đúng adj giây
+  → qua nhiều vòng, offset_accumulated ≈ -fake_offset
+  → my_clock() ≈ time.time()  (khớp với Server)
+```
+
+Trong hệ thống thực, có 2 cách điều chỉnh:
+- **Slewing**: Tăng/giảm tốc độ tick từ từ (ít gây gián đoạn, an toàn hơn)
+- **Stepping**: Đặt lại đồng hồ ngay (dùng khi lệch quá lớn)
+
+#### Bước 5 — Báo cáo Dashboard
+
+Sau mỗi lần nhận ADJUST, Client gửi HTTP POST đến `http://<server>:8080/api/berkeley/result`:
+```json
+{
+  "node_id": 1,
+  "adjustment": -4.975,
+  "avg_offset": 0.025,
+  "time_before": "15:30:05.000",
+  "time_after":  "15:30:00.025",
+  "remaining_error_ms": 25.0,
+  "fake_offset": 5.0
+}
+```
+
+### Ví dụ số minh họa thuật toán Berkeley
+
+**Tình huống:** 4 Client với fake_offset khác nhau, Server là tham chiếu.
+
+```
+Ban đầu (so với thời gian thực 15:30:00.000):
+  Server  : 15:30:00.000  (offset = 0)
+  Node 1  : 15:30:05.000  (offset = +5.0s, nhanh)
+  Node 2  : 15:29:52.000  (offset = -8.0s, chậm)
+  Node 3  : 15:30:02.000  (offset = +2.0s, nhanh)
+  Node 4  : 15:29:59.000  (offset = -1.0s, chậm)
+
+Bước 1 — Server tính offset từng node:
+  offset_server = 0.0
+  offset_1 = +5.0s, offset_2 = -8.0s, offset_3 = +2.0s, offset_4 = -1.0s
+
+Bước 2 — Trung bình:
+  avg = (0 + 5 - 8 + 2 - 1) / 5 = -2/5 = -0.4s
+
+Bước 3 — Tính adj:
+  adj_1 = -0.4 - (+5.0) = -5.4s  (Node 1 cần TRỪ 5.4s)
+  adj_2 = -0.4 - (-8.0) = +7.6s  (Node 2 cần CỘNG 7.6s)
+  adj_3 = -0.4 - (+2.0) = -2.4s  (Node 3 cần TRỪ 2.4s)
+  adj_4 = -0.4 - (-1.0) = +0.6s  (Node 4 cần CỘNG 0.6s)
+  (Server tự điều chỉnh: adj_server = -0.4 - 0 = -0.4s)
+
+Sau điều chỉnh (tất cả hội tụ về -0.4s so với thực tế):
+  Server  : 15:29:59.600  ← cũng điều chỉnh về trung bình
+  Node 1  : 15:29:59.600  ✅ đồng bộ
+  Node 2  : 15:29:59.600  ✅ đồng bộ
+  Node 3  : 15:29:59.600  ✅ đồng bộ
+  Node 4  : 15:29:59.600  ✅ đồng bộ
+```
+
+**Lưu ý:** Trong demo này, Server không tự điều chỉnh đồng hồ (vì `time.time()` là đồng hồ OS), nhưng theo thuật toán gốc, Server cũng phải áp dụng `adj_server = avg_offset - 0 = avg_offset`.
+
+### Tóm tắt luồng message Berkeley
+
+```
+berkeley_client.py ──TCP──► berkeley_server.py (Port 5002)
+  [Node 1]         register →
+                   ← registered
+                   (chờ...)
+                   ← poll {"server_time": T}
+                   poll_response {"client_time": my_clock()} →
+                   ← adjust {"adjustment": adj, "avg_offset": avg}
+                   ──HTTP POST──► dashboard.py (Port 8080) [báo kết quả]
+```
+
+---
+
 ## Tóm tắt luồng message giữa Client và Server
 
-### NTP
+### NTP (Cristian)
 ```
 ntp_client.py ──TCP──► ntp_server.py (Port 5000)
               ◄── T2, T3 ──
               ──HTTP POST──► dashboard.py (Port 8080) [báo kết quả]
+```
+
+### Berkeley
+```
+berkeley_client.py ──TCP──► berkeley_server.py (Port 5002)
+  [Node 1]         register →
+                   ← registered
+                   ← poll
+                   poll_response →
+                   ← adjust
+                   ──HTTP POST──► dashboard.py (Port 8080) [báo kết quả]
 ```
 
 ### Logical Clock
@@ -271,8 +438,8 @@ logic_client.py ──TCP──► logic_server.py (Port 5001)
 ```
 
 ### Định dạng message
-Tất cả message giữa `logic_client.py` và `logic_server.py` là **JSON kết thúc bằng `\n`**:
+Tất cả message giữa `berkeley_client.py` và `berkeley_server.py` là **JSON kết thúc bằng `\n`**:
 ```
-{"type": "send_event", "node_id": 1, "target_node": 2, "lamport_clock": 3, ...}\n
+{"type": "poll_response", "client_time": 1712644585.123}\n
 ```
-Ký tự `\n` để Server biết một message đã kết thúc và bắt đầu parse (line-buffered protocol).
+Ký tự `\n` để bên nhận biết một message đã kết thúc và bắt đầu parse (line-buffered protocol), giống hệt logic_client/logic_server.

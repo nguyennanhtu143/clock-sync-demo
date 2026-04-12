@@ -8,12 +8,7 @@ import socket
 import threading
 import json
 import time
-import sys
 from datetime import datetime
-
-from colorama import init, Fore, Style, Back
-
-init(autoreset=True)
 
 HOST = "0.0.0.0"
 PORT = 5001
@@ -42,32 +37,9 @@ def format_time(ts):
     return datetime.fromtimestamp(ts).strftime("%H:%M:%S.%f")[:-3]
 
 
-def log(level, msg, color=Fore.WHITE):
+def log(level, msg):
     ts = format_time(time.time())
-    prefix_map = {
-        "INFO": f"{Fore.CYAN}[{ts}] {Fore.GREEN}[LOGIC]{Style.RESET_ALL}",
-        "EVENT": f"{Fore.CYAN}[{ts}] {Fore.MAGENTA}[EVENT]{Style.RESET_ALL}",
-        "CONN": f"{Fore.CYAN}[{ts}] {Fore.YELLOW}[CONN]{Style.RESET_ALL}",
-        "FWD": f"{Fore.CYAN}[{ts}] {Fore.BLUE}[FWD →]{Style.RESET_ALL}",
-        "ERROR": f"{Fore.CYAN}[{ts}] {Fore.RED}[ERROR]{Style.RESET_ALL}",
-        "SUCCESS": f"{Fore.CYAN}[{ts}] {Fore.GREEN}[  ✓  ]{Style.RESET_ALL}",
-    }
-    prefix = prefix_map.get(level, f"[{ts}] [{level}]")
-    print(f"  {prefix} {color}{msg}{Style.RESET_ALL}")
-
-
-def print_banner():
-    banner = f"""
-{Fore.MAGENTA}{'═' * 60}
-{Fore.MAGENTA}║{Fore.WHITE}{Back.MAGENTA}{'LOGICAL CLOCK SERVER':^58}{Style.RESET_ALL}{Fore.MAGENTA}║
-{Fore.MAGENTA}{'═' * 60}
-{Fore.MAGENTA}║{Style.RESET_ALL}  {'Role:':<15} {Fore.YELLOW}Event Coordinator{Style.RESET_ALL}{'':>19}{Fore.MAGENTA}║
-{Fore.MAGENTA}║{Style.RESET_ALL}  {'Protocol:':<15} {Fore.YELLOW}TCP{Style.RESET_ALL}{'':>34}{Fore.MAGENTA}║
-{Fore.MAGENTA}║{Style.RESET_ALL}  {'Port:':<15} {Fore.YELLOW}{PORT}{Style.RESET_ALL}{'':>33}{Fore.MAGENTA}║
-{Fore.MAGENTA}║{Style.RESET_ALL}  {'Algorithms:':<15} {Fore.YELLOW}Lamport Clock + Vector Clock{Style.RESET_ALL}{'':>9}{Fore.MAGENTA}║
-{Fore.MAGENTA}{'═' * 60}{Style.RESET_ALL}
-"""
-    print(banner)
+    print(f"[{ts}] [{level}] {msg}")
 
 
 def record_event(event_data):
@@ -76,7 +48,6 @@ def record_event(event_data):
         event_data["timestamp"] = time.time()
         event_data["time_str"] = format_time(time.time())
         logic_events.append(event_data)
-    # Emit real-time đến browser qua SocketIO (nếu callback đã được set)
     if _emit_callback:
         try:
             _emit_callback("logic_update", dict(event_data))
@@ -149,10 +120,8 @@ def handle_client(conn, addr):
                         }
                         node_connections[node_id] = conn
 
-                    log("CONN", f"{Fore.GREEN}Node {node_id}{Style.RESET_ALL} kết nối từ {addr[0]}:{addr[1]}")
-                    log("INFO", f"Tổng số node đang kết nối: {Fore.YELLOW}{len(connected_nodes)}{Style.RESET_ALL}")
+                    log("CONN", f"Node {node_id} kết nối từ {addr[0]}:{addr[1]} | Tổng: {len(connected_nodes)} node")
 
-                    # Gửi xác nhận
                     ack = json.dumps({"type": "registered", "node_id": node_id}) + "\n"
                     conn.sendall(ack.encode("utf-8"))
 
@@ -162,9 +131,7 @@ def handle_client(conn, addr):
                     lamport = message["lamport_clock"]
                     vector = message["vector_clock"]
 
-                    log("EVENT", f"Node {src} → {Fore.CYAN}LOCAL EVENT{Style.RESET_ALL}")
-                    log("INFO", f"  Lamport: {Fore.YELLOW}{lamport}{Style.RESET_ALL} | "
-                                f"Vector: {Fore.YELLOW}{vector}{Style.RESET_ALL}")
+                    log("EVENT", f"Node {src} LOCAL | Lamport={lamport} Vector={vector}")
 
                     record_event({
                         "type": "local",
@@ -181,10 +148,7 @@ def handle_client(conn, addr):
                     vector = message["vector_clock"]
                     msg_content = message.get("message", "")
 
-                    log("EVENT", f"Node {src} → {Fore.BLUE}SEND{Style.RESET_ALL} → Node {target}")
-                    log("INFO", f"  Message: \"{msg_content}\"")
-                    log("INFO", f"  Lamport: {Fore.YELLOW}{lamport}{Style.RESET_ALL} | "
-                                f"Vector: {Fore.YELLOW}{vector}{Style.RESET_ALL}")
+                    log("EVENT", f"Node {src} SEND -> Node {target} | Lamport={lamport} msg=\"{msg_content}\"")
 
                     record_event({
                         "type": "send",
@@ -195,7 +159,6 @@ def handle_client(conn, addr):
                         "message": msg_content,
                     })
 
-                    # Forward message đến target node
                     forward_msg = {
                         "type": "receive_event",
                         "from_node": src,
@@ -204,9 +167,7 @@ def handle_client(conn, addr):
                         "message": msg_content,
                     }
 
-                    if send_to_node(target, forward_msg):
-                        log("FWD", f"Forwarded message từ Node {src} → Node {target}")
-                    else:
+                    if not send_to_node(target, forward_msg):
                         log("ERROR", f"Forward thất bại: Node {target} không online")
 
                 # ── Sự kiện RECEIVE (client report kết quả receive) ──
@@ -216,9 +177,7 @@ def handle_client(conn, addr):
                     lamport = message["lamport_clock"]
                     vector = message["vector_clock"]
 
-                    log("EVENT", f"Node {src} → {Fore.YELLOW}RECEIVE{Style.RESET_ALL} ← Node {from_node}")
-                    log("INFO", f"  Lamport: {Fore.YELLOW}{lamport}{Style.RESET_ALL} | "
-                                f"Vector: {Fore.YELLOW}{vector}{Style.RESET_ALL}")
+                    log("EVENT", f"Node {src} RECEIVE <- Node {from_node} | Lamport={lamport} Vector={vector}")
 
                     record_event({
                         "type": "receive",
@@ -227,8 +186,6 @@ def handle_client(conn, addr):
                         "lamport_clock": lamport,
                         "vector_clock": vector,
                     })
-
-                print(f"  {Fore.MAGENTA}{'─' * 58}{Style.RESET_ALL}")
 
     except (ConnectionResetError, ConnectionAbortedError):
         pass
@@ -239,22 +196,20 @@ def handle_client(conn, addr):
             with logic_lock:
                 connected_nodes.pop(node_id, None)
                 node_connections.pop(node_id, None)
-            log("CONN", f"{Fore.RED}Node {node_id}{Style.RESET_ALL} đã ngắt kết nối")
+            log("CONN", f"Node {node_id} ngắt kết nối")
         conn.close()
 
 
 def start_server():
     """Khởi động Logic Server"""
-    print_banner()
+    print(f"=== LOGICAL CLOCK SERVER | Port {PORT} | Lamport + Vector Clock ===")
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     server_socket.bind((HOST, PORT))
     server_socket.listen(5)
 
-    log("INFO", f"Server đang lắng nghe trên {Fore.GREEN}{HOST}:{PORT}{Style.RESET_ALL}")
-    log("INFO", "Đang chờ kết nối từ các Client...")
-    print(f"  {Fore.MAGENTA}{'─' * 58}{Style.RESET_ALL}")
+    log("INFO", f"Đang lắng nghe trên {HOST}:{PORT}")
 
     try:
         while True:

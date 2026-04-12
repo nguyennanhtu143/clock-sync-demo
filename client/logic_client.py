@@ -9,12 +9,7 @@ import threading
 import json
 import time
 import argparse
-import sys
 from datetime import datetime
-
-from colorama import init, Fore, Style, Back
-
-init(autoreset=True)
 
 SERVER_PORT = 5001
 DASHBOARD_PORT = 8080
@@ -24,67 +19,9 @@ def format_time(ts):
     return datetime.fromtimestamp(ts).strftime("%H:%M:%S.%f")[:-3]
 
 
-# ═══════════════════════════════════════════════
-# Console UI
-# ═══════════════════════════════════════════════
-
-NODE_COLORS = {
-    0: Fore.WHITE,
-    1: Fore.GREEN,
-    2: Fore.YELLOW,
-    3: Fore.MAGENTA,
-    4: Fore.CYAN,
-}
-
-
-def get_color(node_id):
-    return NODE_COLORS.get(node_id, Fore.WHITE)
-
-
 def log(level, msg):
     ts = format_time(time.time())
-    icons = {
-        "INFO": f"{Fore.GREEN}ℹ{Style.RESET_ALL}",
-        "EVENT": f"{Fore.MAGENTA}⚡{Style.RESET_ALL}",
-        "SEND": f"{Fore.BLUE}↑{Style.RESET_ALL}",
-        "RECV": f"{Fore.YELLOW}↓{Style.RESET_ALL}",
-        "OK": f"{Fore.GREEN}✓{Style.RESET_ALL}",
-        "WARN": f"{Fore.YELLOW}⚠{Style.RESET_ALL}",
-    }
-    icon = icons.get(level, " ")
-    print(f"  {Fore.CYAN}[{ts}]{Style.RESET_ALL} {icon} {msg}")
-
-
-def print_box(lines, title="", color=Fore.MAGENTA, width=56):
-    print()
-    if title:
-        padding = width - len(title) - 4
-        left_pad = padding // 2
-        right_pad = padding - left_pad
-        print(f"  {color}╔{'═' * left_pad} {Style.BRIGHT}{title} {Style.RESET_ALL}{color}{'═' * right_pad}╗{Style.RESET_ALL}")
-    else:
-        print(f"  {color}╔{'═' * width}╗{Style.RESET_ALL}")
-    for line in lines:
-        print(f"  {color}║{Style.RESET_ALL} {line:<{width - 2}} {color}║{Style.RESET_ALL}")
-    print(f"  {color}╚{'═' * width}╝{Style.RESET_ALL}")
-    print()
-
-
-def print_clock_state(node_id, lamport, vector, event_type="", extra=""):
-    """In trạng thái clock đẹp"""
-    color = get_color(node_id)
-    vector_str = str(vector)
-
-    lines = []
-    if event_type:
-        lines.append(f"{'Sự kiện:':<20} {Fore.WHITE}{Style.BRIGHT}{event_type}{Style.RESET_ALL}")
-    if extra:
-        lines.append(f"{'Chi tiết:':<20} {extra}")
-    lines.append(f"{'Lamport Clock:':<20} {Fore.YELLOW}{Style.BRIGHT}{lamport}{Style.RESET_ALL}")
-    lines.append(f"{'Vector Clock:':<20} {Fore.CYAN}{vector_str}{Style.RESET_ALL}")
-
-    title = f"NODE {node_id} — CLOCK STATE"
-    print_box(lines, title=title, color=color)
+    print(f"[{ts}] [{level}] {msg}")
 
 
 # ═══════════════════════════════════════════════
@@ -97,18 +34,13 @@ class LogicalClockClient:
         self.node_id = node_id
         self.total_nodes = total_nodes
 
-        # Lamport Clock
         self.lamport_clock = 0
-
-        # Vector Clock: [node_0, node_1, node_2, node_3, node_4]
         self.vector_clock = [0] * total_nodes
 
-        # Socket kết nối đến Logic Server
         self.sock = None
         self.connected = False
         self.buffer = ""
 
-        # Event history
         self.event_history = []
 
     def connect(self):
@@ -118,7 +50,6 @@ class LogicalClockClient:
             self.sock.connect((self.server_ip, SERVER_PORT))
             self.connected = True
 
-            # Đăng ký
             register_msg = json.dumps({
                 "type": "register",
                 "node_id": self.node_id,
@@ -126,16 +57,13 @@ class LogicalClockClient:
             }) + "\n"
             self.sock.sendall(register_msg.encode("utf-8"))
 
-            # Nhận xác nhận
             data = self.sock.recv(4096).decode("utf-8")
-            # Parse ack
             for line in data.strip().split("\n"):
                 if line.strip():
                     ack = json.loads(line)
                     if ack.get("type") == "registered":
                         log("OK", f"Đã kết nối và đăng ký với Logic Server")
 
-            # Bắt đầu thread lắng nghe message đến
             listener = threading.Thread(target=self._listen_incoming, daemon=True)
             listener.start()
 
@@ -179,22 +107,14 @@ class LogicalClockClient:
         old_lamport = self.lamport_clock
         old_vector = list(self.vector_clock)
 
-        # Cập nhật Lamport Clock: LC = max(LC, received_LC) + 1
         self.lamport_clock = max(self.lamport_clock, received_lamport) + 1
-
-        # Cập nhật Vector Clock:
-        # VC[i] = max(VC[i], received_VC[i]) for all i, then VC[self] += 1
         for i in range(self.total_nodes):
             self.vector_clock[i] = max(self.vector_clock[i], received_vector[i])
         self.vector_clock[self.node_id] += 1
 
-        print(f"\n  {Fore.YELLOW}{'!' * 50}{Style.RESET_ALL}")
-        print(f"  {Fore.YELLOW}  📨 MESSAGE NHẬN TỪ NODE {from_node}: \"{msg_content}\"{Style.RESET_ALL}")
-        log("RECV", f"Nhận message từ Node {from_node}")
-        log("INFO", f"  Lamport: {old_lamport} → {Fore.YELLOW}{self.lamport_clock}{Style.RESET_ALL}")
-        log("INFO", f"  Vector:  {old_vector} → {Fore.CYAN}{self.vector_clock}{Style.RESET_ALL}")
+        log("RECV", f"Message tu Node {from_node}: \"{msg_content}\" | Lamport: {old_lamport} -> {self.lamport_clock} | Vector: {old_vector} -> {self.vector_clock}")
 
-        self._record_event("RECEIVE", f"← Node {from_node}: \"{msg_content}\"",
+        self._record_event("RECEIVE", f"<- Node {from_node}: \"{msg_content}\"",
                            old_lamport, self.lamport_clock,
                            old_vector, list(self.vector_clock))
 
@@ -211,8 +131,6 @@ class LogicalClockClient:
         except Exception:
             pass
 
-        print_clock_state(self.node_id, self.lamport_clock, self.vector_clock,
-                          "RECEIVE", f"← Node {from_node}: \"{msg_content}\"")
         self._show_menu_prompt()
 
     def local_event(self):
@@ -220,21 +138,15 @@ class LogicalClockClient:
         old_lamport = self.lamport_clock
         old_vector = list(self.vector_clock)
 
-        # Lamport: LC += 1
         self.lamport_clock += 1
-
-        # Vector: VC[self] += 1
         self.vector_clock[self.node_id] += 1
 
-        log("EVENT", f"Sự kiện LOCAL")
-        log("INFO", f"  Lamport: {old_lamport} → {Fore.YELLOW}{self.lamport_clock}{Style.RESET_ALL}")
-        log("INFO", f"  Vector:  {old_vector} → {Fore.CYAN}{self.vector_clock}{Style.RESET_ALL}")
+        log("EVENT", f"LOCAL | Lamport: {old_lamport} -> {self.lamport_clock} | Vector: {old_vector} -> {self.vector_clock}")
 
         self._record_event("LOCAL", "Sự kiện nội bộ",
                            old_lamport, self.lamport_clock,
                            old_vector, list(self.vector_clock))
 
-        # Thông báo server
         notify = json.dumps({
             "type": "local_event",
             "node_id": self.node_id,
@@ -246,9 +158,6 @@ class LogicalClockClient:
         except Exception:
             pass
 
-        print_clock_state(self.node_id, self.lamport_clock, self.vector_clock,
-                          "LOCAL EVENT", "Sự kiện nội bộ")
-
     def send_event(self, target_node, message=""):
         """Gửi message đến node khác"""
         if target_node == self.node_id:
@@ -258,21 +167,15 @@ class LogicalClockClient:
         old_lamport = self.lamport_clock
         old_vector = list(self.vector_clock)
 
-        # Lamport: LC += 1
         self.lamport_clock += 1
-
-        # Vector: VC[self] += 1
         self.vector_clock[self.node_id] += 1
 
-        log("SEND", f"Gửi message → Node {target_node}: \"{message}\"")
-        log("INFO", f"  Lamport: {old_lamport} → {Fore.YELLOW}{self.lamport_clock}{Style.RESET_ALL}")
-        log("INFO", f"  Vector:  {old_vector} → {Fore.CYAN}{self.vector_clock}{Style.RESET_ALL}")
+        log("SEND", f"SEND -> Node {target_node}: \"{message}\" | Lamport: {old_lamport} -> {self.lamport_clock} | Vector: {old_vector} -> {self.vector_clock}")
 
-        self._record_event("SEND", f"→ Node {target_node}: \"{message}\"",
+        self._record_event("SEND", f"-> Node {target_node}: \"{message}\"",
                            old_lamport, self.lamport_clock,
                            old_vector, list(self.vector_clock))
 
-        # Gửi đến server để forward
         send_msg = json.dumps({
             "type": "send_event",
             "node_id": self.node_id,
@@ -286,25 +189,17 @@ class LogicalClockClient:
         except Exception as e:
             log("WARN", f"Lỗi gửi: {e}")
 
-        print_clock_state(self.node_id, self.lamport_clock, self.vector_clock,
-                          "SEND EVENT", f"→ Node {target_node}: \"{message}\"")
-
     def show_state(self):
         """Hiển thị trạng thái clock hiện tại"""
-        lines = [
-            f"{'Lamport Clock:':<20} {Fore.YELLOW}{Style.BRIGHT}{self.lamport_clock}{Style.RESET_ALL}",
-            f"{'Vector Clock:':<20} {Fore.CYAN}{self.vector_clock}{Style.RESET_ALL}",
-            f"{'─' * 54}",
-            f"{'Tổng sự kiện:':<20} {len(self.event_history)}",
-        ]
-
+        print(f"\n--- TRANG THAI NODE {self.node_id} ---")
+        print(f"  Lamport Clock : {self.lamport_clock}")
+        print(f"  Vector Clock  : {self.vector_clock}")
+        print(f"  Tong su kien  : {len(self.event_history)}")
         if self.event_history:
-            lines.append(f"{'─' * 54}")
-            lines.append(f"{Fore.WHITE}{Style.BRIGHT}{'Lịch sử sự kiện gần nhất:'}{Style.RESET_ALL}")
+            print(f"  Su kien gan nhat:")
             for evt in self.event_history[-5:]:
-                lines.append(f"  {evt['type']:<10} L={evt['new_lamport']} V={evt['new_vector']}")
-
-        print_box(lines, f"TRẠNG THÁI NODE {self.node_id}", get_color(self.node_id))
+                print(f"    {evt['type']:<10} L={evt['new_lamport']} V={evt['new_vector']}")
+        print()
 
     def show_history(self):
         """Hiển thị toàn bộ lịch sử sự kiện"""
@@ -312,24 +207,11 @@ class LogicalClockClient:
             log("INFO", "Chưa có sự kiện nào.")
             return
 
-        print(f"\n  {Fore.MAGENTA}{'═' * 75}{Style.RESET_ALL}")
-        print(f"  {Fore.WHITE}{Style.BRIGHT}{'#':<4} {'Sự kiện':<12} {'Lamport':>8} {'→':>3} {'Lamport':>8} {'Vector Clock':<30}{Style.RESET_ALL}")
-        print(f"  {Fore.MAGENTA}{'─' * 75}{Style.RESET_ALL}")
-
+        print(f"\n{'#':<4} {'Su kien':<12} {'Lamport':<10} {'-> Lamport':<12} {'Vector Clock'}")
+        print(f"{'-' * 70}")
         for i, evt in enumerate(self.event_history, 1):
-            evt_color = {
-                "LOCAL": Fore.CYAN,
-                "SEND": Fore.BLUE,
-                "RECEIVE": Fore.YELLOW,
-            }.get(evt["type"], Fore.WHITE)
-
-            print(f"  {Fore.WHITE}{i:<4}{Style.RESET_ALL} "
-                  f"{evt_color}{evt['type']:<12}{Style.RESET_ALL} "
-                  f"{evt['old_lamport']:>8} {Fore.WHITE}→{Style.RESET_ALL} "
-                  f"{Fore.YELLOW}{evt['new_lamport']:>8}{Style.RESET_ALL} "
-                  f"{Fore.CYAN}{str(evt['new_vector']):<30}{Style.RESET_ALL}")
-
-        print(f"  {Fore.MAGENTA}{'═' * 75}{Style.RESET_ALL}\n")
+            print(f"{i:<4} {evt['type']:<12} {evt['old_lamport']:<10} {evt['new_lamport']:<12} {evt['new_vector']}")
+        print()
 
     def _record_event(self, event_type, detail, old_lamport, new_lamport, old_vector, new_vector):
         self.event_history.append({
@@ -344,7 +226,7 @@ class LogicalClockClient:
 
     def _show_menu_prompt(self):
         """Hiện lại prompt menu"""
-        print(f"\n  {Fore.WHITE}Chọn [1-5]: {Style.RESET_ALL}", end="", flush=True)
+        print(f"\n  Chon [1-5]: ", end="", flush=True)
 
     def close(self):
         self.connected = False
@@ -358,21 +240,16 @@ class LogicalClockClient:
 
 def run_interactive(client):
     """Menu tương tác chính"""
-    color = get_color(client.node_id)
-
     while True:
-        print(f"\n  {color}{'═' * 45}{Style.RESET_ALL}")
-        print(f"  {color}║{Style.RESET_ALL} {Fore.WHITE}{Style.BRIGHT}LOGICAL CLOCK — NODE {client.node_id}{Style.RESET_ALL}{'':>{22 - len(str(client.node_id))}}{color}║{Style.RESET_ALL}")
-        print(f"  {color}{'═' * 45}{Style.RESET_ALL}")
-        print(f"  {color}║{Style.RESET_ALL}  {Fore.CYAN}[1]{Style.RESET_ALL} Local Event (sự kiện nội bộ)     {color}║{Style.RESET_ALL}")
-        print(f"  {color}║{Style.RESET_ALL}  {Fore.BLUE}[2]{Style.RESET_ALL} Send Message → Node khác         {color}║{Style.RESET_ALL}")
-        print(f"  {color}║{Style.RESET_ALL}  {Fore.YELLOW}[3]{Style.RESET_ALL} Xem trạng thái Clock            {color}║{Style.RESET_ALL}")
-        print(f"  {color}║{Style.RESET_ALL}  {Fore.MAGENTA}[4]{Style.RESET_ALL} Xem lịch sử sự kiện            {color}║{Style.RESET_ALL}")
-        print(f"  {color}║{Style.RESET_ALL}  {Fore.RED}[5]{Style.RESET_ALL} Thoát                            {color}║{Style.RESET_ALL}")
-        print(f"  {color}{'═' * 45}{Style.RESET_ALL}")
+        print(f"\n--- LOGICAL CLOCK NODE {client.node_id} ---")
+        print(f"  [1] Local Event (su kien noi bo)")
+        print(f"  [2] Send Message -> Node khac")
+        print(f"  [3] Xem trang thai Clock")
+        print(f"  [4] Xem lich su su kien")
+        print(f"  [5] Thoat")
 
         try:
-            choice = input(f"\n  {Fore.WHITE}Chọn [1-5]: {Style.RESET_ALL}").strip()
+            choice = input(f"\n  Chon [1-5]: ").strip()
         except (EOFError, KeyboardInterrupt):
             break
 
@@ -381,11 +258,11 @@ def run_interactive(client):
 
         elif choice == "2":
             try:
-                target = int(input(f"  {Fore.BLUE}Gửi đến Node (0-{client.total_nodes - 1}): {Style.RESET_ALL}").strip())
+                target = int(input(f"  Gui den Node (0-{client.total_nodes - 1}): ").strip())
                 if target < 0 or target >= client.total_nodes:
-                    log("WARN", f"Node ID phải trong khoảng 0-{client.total_nodes - 1}")
+                    log("WARN", f"Node ID phai trong khoang 0-{client.total_nodes - 1}")
                     continue
-                msg = input(f"  {Fore.BLUE}Nội dung message: {Style.RESET_ALL}").strip()
+                msg = input(f"  Noi dung message: ").strip()
                 if not msg:
                     msg = f"hello from node {client.node_id}"
                 client.send_event(target, msg)
@@ -414,11 +291,7 @@ def main():
     parser.add_argument("--total-nodes", type=int, default=5, help="Tổng số node (mặc định 5)")
     args = parser.parse_args()
 
-    color = get_color(args.node_id)
-    print(f"\n{color}{'═' * 60}{Style.RESET_ALL}")
-    print(f"{color}║{Style.RESET_ALL}{' ' * 10}{Fore.WHITE}{Style.BRIGHT}HỆ THỐNG ĐỒNG BỘ THỜI GIAN PHÂN TÁN{Style.RESET_ALL}{' ' * 11}{color}║{Style.RESET_ALL}")
-    print(f"{color}║{Style.RESET_ALL}{' ' * 12}{Fore.MAGENTA}Logical Clock Client Module{Style.RESET_ALL}{' ' * 19}{color}║{Style.RESET_ALL}")
-    print(f"{color}{'═' * 60}{Style.RESET_ALL}")
+    print(f"\n=== HE THONG DONG BO THOI GIAN PHAN TAN | Logical Clock Client Node {args.node_id} ===\n")
 
     client = LogicalClockClient(args.server_ip, args.node_id, args.total_nodes)
 
@@ -428,7 +301,7 @@ def main():
         log("WARN", "Không thể kết nối. Vui lòng đảm bảo logic_server.py đang chạy.")
         return
 
-    print_clock_state(args.node_id, 0, [0] * args.total_nodes, "KHỞI TẠO", "Đã kết nối")
+    log("INFO", f"Khoi tao: Lamport=0 Vector={[0] * args.total_nodes}")
 
     try:
         run_interactive(client)
@@ -436,7 +309,7 @@ def main():
         pass
     finally:
         client.close()
-        print(f"\n  {Fore.GREEN}✓ Node {args.node_id} đã tắt.{Style.RESET_ALL}\n")
+        print(f"\nNode {args.node_id} da tat.\n")
 
 
 if __name__ == "__main__":

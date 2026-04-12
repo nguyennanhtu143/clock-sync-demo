@@ -195,9 +195,51 @@ python ntp_client.py --server-ip 26.55.10.1 --node-id 1
 
 Khi thấy `Nhấn Enter để bắt đầu đồng bộ NTP...` → người điều phối hô "bắt đầu" → tất cả nhấn Enter.
 
+
 ---
 
-## Bước 7: Chạy Logical Clock Client (trên 4 máy Client)
+## Bước 7: Chạy Berkeley Client (trên 4 máy Client)
+
+Sau khi demo NTP (Cristian) xong, chạy Berkeley để xem thuật toán đồng bộ tập trung:
+
+```bash
+# ⚠️ DÙNG IP RADMIN CỦA SERVER (không phải IP WiFi)
+python berkeley_client.py --server-ip 26.55.10.1 --node-id 1
+```
+
+**Phân chia node-id:**
+| Máy       | Lệnh                                                                |
+|-----------|---------------------------------------------------------------------|
+| Client 1  | `python berkeley_client.py --server-ip 26.55.10.1 --node-id 1`    |
+| Client 2  | `python berkeley_client.py --server-ip 26.55.10.1 --node-id 2`    |
+| Client 3  | `python berkeley_client.py --server-ip 26.55.10.1 --node-id 3`    |
+| Client 4  | `python berkeley_client.py --server-ip 26.55.10.1 --node-id 4`    |
+
+Khi thấy `Đang chờ Berkeley Server poll...` → Tất cả 4 Client đã sẵn sàng.
+
+### Kích hoạt vòng đồng bộ Berkeley
+
+**Từ bất kỳ máy nào trong mạng Radmin:**
+```powershell
+Invoke-WebRequest -Method POST -Uri http://26.55.10.1:8080/api/berkeley/trigger
+```
+
+Hoặc dùng curl (nếu có):
+```bash
+curl -X POST http://26.55.10.1:8080/api/berkeley/trigger
+```
+
+Sau khi trigger, mỗi Client in ra kết quả điều chỉnh và Dashboard tại `http://26.55.10.1:8080` cập nhật real-time.
+
+> ⚠️ Khi dùng Radmin VPN, delay mạng cao hơn (~20-100ms). Điều này làm RTT measurement kém chính xác hơn so với LAN, nhưng vẫn đủ để demo thuật toán Berkeley hoạt động đúng.
+
+---
+
+## Bước 8: Chạy Logical Clock Client (trên 4 máy Client)
+
+---
+
+## Bước 8: Chạy Logical Clock Client (trên 4 máy Client)
 
 ```bash
 python logic_client.py --server-ip 26.55.10.1 --node-id 1
