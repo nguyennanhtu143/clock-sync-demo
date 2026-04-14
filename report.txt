@@ -1,0 +1,113 @@
+3.1.1. Cấu hình
+Về phần mềm, môi trường thực nghiệm sử dụng Docker Engine làm nền tảng container hóa, cho phép định nghĩa toàn bộ hệ thống trong một tệp docker-compose.yml duy nhất và quản lý vòng đời của tất cả container một cách thống nhất. Mạng nội bộ sử dụng Docker bridge network với dải địa chỉ 172.20.0.0/16, cho phép các container giao tiếp với nhau qua tên service thay vì địa chỉ IP cố định — phản ánh đúng cách các microservice giao tiếp trong môi trường thực tế. Việc kiểm thử giao diện và API được thực hiện qua trình duyệt Google Chrome, kết nối đến ứng dụng qua địa chỉ http://localhost:8080.
+
+Bảng 3.1. Cấu hình phần mềm môi trường thực nghiệm
+Thành phần	Thông số	Ghi chú
+Container runtime	Docker Engine 	Môi trường chạy thử nghiệm
+Mạng nội bộ	Docker bridge	Container giao tiếp qua hostname
+Trình duyệt kiểm thử	Google Chrome	Giao diện & API 
+
+3.1.2. Các dịch vụ chạy trên docker
+Toàn bộ hệ thống được định nghĩa trong một tệp docker-compose.yml duy nhất với tám service. Mỗi container có vùng dữ liệu (volume) riêng, không chia sẻ filesystem với nhau, tạo ra sự cô lập thực sự giữa các thành phần phân tán. Việc sử dụng Docker bridge network với dải địa chỉ 172.20.0.0/16 cho phép các container giao tiếp qua tên service phản ánh đúng cách microservice hoạt động trong môi trường
+Bảng 3.2. Danh sách và mô tả các container trong hệ thống
+Container	Image & Port	Vai trò	Mô tả chi tiết
+booking_db	postgres:15 :5441→5432	CSDL chính	Lưu trữ bảng seats (trạng thái ghế) và bảng bookings (lịch sử đặt vé). Cấu hình max_prepared_transactions=100 để hỗ trợ PREPARE TRANSACTION trong giao thức 2PC.
+payment_db	postgres:15 :5442→5432	CSDL thanh toán	Lưu trữ bảng payments ghi nhận giao dịch tài chính. Tham gia 2PC với tư cách participant thứ hai, đảm bảo tính nguyên tử với booking_db.
+notif_db	postgres:15 :5443→5432	CSDL thông báo	Lưu trữ bảng notification_queue (hàng đợi gửi email). Là participant thứ ba trong 2PC; nếu commit thất bại, email sẽ không bị gửi trùng.
+redis1	redis:7 :6379	Redlock node 1	Node Redis độc lập thứ nhất. Redisson MultiLock ghi khóa vào node này; quorum 2/3 yêu cầu ít nhất 2 node phản hồi thành công.
+redis2	redis:7 :6380	Redlock node 2	Node Redis độc lập thứ hai. Nếu node này down, hệ thống vẫn hoạt động (còn 2 node còn lại đạt quorum).
+redis3	redis:7 :6381	Redlock node 3	Node Redis độc lập thứ ba, tạo lẻ số phiếu tránh split-brain. TTL khóa mặc định 10 giây tự giải phóng nếu server crash.
+booking_web	Tomcat 10 :8080	Ứng dụng web	Jakarta Servlet 6.0 chạy trên Apache Tomcat 10.1. Điểm vào duy nhất từ bên ngoài; xử lý yêu cầu HTTP, điều phối Redlock và 2PC, render giao diện JSP.
+Ba instance PostgreSQL được khởi tạo từ cùng một image postgres:15 nhưng với các biến môi trường POSTGRES_DB khác nhau (booking_db, payment_db, notif_db), được ánh xạ ra các cổng host khác nhau (5441, 5442, 5443). Điều này đảm bảo tính độc lập tuyệt đối về dữ liệu và tiến trình: một giao dịch trên booking_db hoàn toàn không ảnh hưởng đến trạng thái tiến trình nội bộ của payment_db hay notif_db, đúng như yêu cầu của giao thức Two-Phase Commit.
+Ba node Redis (redis1, redis2, redis3) được triển khai như các instance độc lập hoàn toàn (standalone), không sử dụng chế độ Cluster hay Sentinel. Đây là thiết kế đúng theo thuật toán Redlock: mỗi node phải là một tiến trình Redis riêng biệt để tránh điểm lỗi đơn (single point of failure). Thư viện Redisson sử dụng MultiLock để ghi khóa đồng thời lên cả ba node và chỉ coi khóa là thành công khi ít nhất 2/3 node phản hồi thành công trong thời gian quorum.
+
+
+3.1.3. Cấu hình PostgreSQL cho Two-Phase Commit
+Tính năng Two-Phase Commit trong PostgreSQL không được bật mặc định. Để kích hoạt, tham số max_prepared_transactions trong postgresql.conf phải được đặt lớn hơn 0. Trong thực nghiệm này, giá trị được đặt là 100, cho phép tối đa 100 giao dịch đồng thời ở trạng thái PREPARED trên mỗi instance. Các tham số quan trọng khác được cấu hình như sau:
+Một điểm cần lưu ý là khi một giao dịch đã PREPARE nhưng chưa COMMIT hoặc ROLLBACK (ví dụ do coordinator crash), PostgreSQL sẽ giữ nguyên trạng thái này cho đến khi có lệnh tiếp theo. Các giao dịch 'mồ côi' (orphaned prepared transactions) có thể được xem qua view pg_prepared_xacts và cần được xử lý thủ công. Đây là hạn chế nội tại của giao thức 2PC sẽ được thảo luận trong phần Kết luận.
+3.1.4. Kiến trúc mã nguồn Java
+Ứng dụng web được viết bằng Java với Jakarta Servlet 6.0 chạy trên Apache Tomcat 10.1. Cấu trúc mã nguồn tuân theo nguyên tắc phân tách trách nhiệm rõ ràng (Separation of Concerns), với mỗi lớp đảm nhiệm một vai trò cụ thể trong toàn bộ luồng xử lý:
+Bảng 3.3. Các lớp Java chính và trách nhiệm trong hệ thống
+Lớp Java	Loại	Trách nhiệm chính
+AppContext
+Listener	ServletContext
+Listener	Khởi tạo RedlockManager và BookingService khi Tomcat deploy; đọc biến môi trường Docker.
+BookingServlet	HttpServlet (POST)	Nhận yêu cầu HTTP POST; phân luồng single/race mode; trả về JSON.
+SeatServlet	HttpServlet (GET)	Truy vấn booking_db lấy danh sách ghế; forward đến seats.jsp.
+BookingService	Service / Orchestrator	Điều phối toàn bộ luồng: gọi RedlockManager → TwoPhaseCommitCoordinator.
+RedlockManager	Distributed Lock	Tạo và quản lý Redisson MultiLock trên 3 node Redis; TTL 10s, timeout 3s.
+TwoPhaseCommit
+Coordinator	2PC Coordinator	Thực thi Phase 1 (PREPARE) và Phase 2 (COMMIT/ROLLBACK) trên 3 JDBC connection.
+BookingRequest / BookingResult	Record (DTO)	Đóng gói dữ liệu đầu vào (userId, seatId, showId, amount) và kết quả trả về.
+
+Luồng gọi hàm được thiết kế theo dạng Chain of Responsibility: HTTP request → BookingServlet → BookingService → RedlockManager (lấy khóa) → TwoPhaseCommitCoordinator (thực thi giao dịch phân tán) → giải phóng khóa → trả về HTTP response. Mỗi bước trong chuỗi này đều có xử lý ngoại lệ độc lập và ghi log chi tiết qua AppLogger, cho phép theo dõi và gỡ lỗi từng giai đoạn một cách độc lập.
+Cấu hình biến môi trường trong docker-compose.yml (booking_web service)
+environment:
+  REDIS_HOST_1:    redis1:6379
+  REDIS_HOST_2:    redis2:6379
+  REDIS_HOST_3:    redis3:6379
+  PG_HOST_BOOKING: booking_db:5432
+  PG_HOST_PAYMENT: payment_db:5432
+  PG_HOST_NOTIF:   notif_db:5432
+  DB_USER:         chien
+  DB_PASS:         chien147
+# AppContextListener đọc các biến này khi Tomcat khởi động (contextInitialized)
+
+
+3.2. Các trang màn hình và luồng thực nghiệm
+Phần này trình bày chi tiết giao diện người dùng, các bước tương tác trong từng kịch bản thực nghiệm, và nhật ký hệ thống (log) minh chứng cơ chế Redlock và Two-Phase Commit hoạt động đúng theo thiết kế. Các kịch bản được thực hiện theo thứ tự từ đơn giản đến phức tạp, tương ứng với các trường hợp biên (edge case) của hệ thống phân tán.
+3.2.1. Màn hình danh sách ghế 
+Người dùng truy cập hệ thống qua địa chỉ http://localhost:8080/booking-web/seats. Đây là điểm vào chính của giao diện, do SeatServlet xử lý theo phương thức HTTP GET. Khi nhận yêu cầu, servlet thực hiện các bước sau:
+•	Đọc tham số showId từ query string (mặc định: SHOW_CGV_20H nếu không có).
+•	Mở kết nối JDBC đến booking_db và thực thi câu lệnh SELECT seat_id, status, booked_by FROM seats WHERE show_id=? ORDER BY seat_id.
+•	Tổng hợp thống kê: tổng số ghế, số ghế đã đặt, số ghế còn trống.
+•	Đặt các giá trị này vào HttpServletRequest và forward đến /WEB-INF/views/seats.jsp để render HTML.
+Giao diện JSP hiển thị sơ đồ rạp chiếu dưới dạng lưới ghế ngồi. Mỗi ô ghế được tô màu theo trạng thái: nền xanh lá cho ghế AVAILABLE và nền đỏ cho ghế BOOKED. Ghế đã đặt hiển thị thêm mã user đã đặt (booked_by) phía dưới để tiện theo dõi trong quá trình thực nghiệm. Phía trên giao diện có thanh thống kê hiển thị tổng số ghế, số ghế đã đặt và tỷ lệ lấp đầy theo phần trăm.
+Phần trên cùng của trang cung cấp thanh dropdown để chuyển đổi giữa các buổi chiếu đang mở bán (CGV 20:00, CGV 22:00, Lotte 19:00). Khi chọn buổi mới, trang gửi GET request với showId tương ứng, SeatServlet thực hiện lại truy vấn SQL và trả về sơ đồ ghế cập nhật. Không có JavaScript phức tạp phía client; toàn bộ render được thực hiện phía server, đảm bảo dữ liệu luôn phản ánh trạng thái mới nhất trong database.
+3.2.2. Kịch bản 1 - Đặt vé thành công không có tương tranh
+Người dùng nhấn vào một ghế có nền xanh (AVAILABLE) trên sơ đồ. Giao diện gửi HTTP POST đến /booking/book với các tham số showId, seatId, userId, amount=150000 và mode=single. BookingServlet nhận yêu cầu, đọc các tham số, tạo đối tượng BookingRequest và gọi BookingService.book(). Toàn bộ luồng xử lý diễn ra như sau:
+Ban đầu người dùng chọn ghê muốn đặt, ở đây là ghế A1
+Sau khi chọn ghế, người dùng bấm xác nhận, sau khoảng thời gian nhất định, trạng thái ghế đã chuyến sang đã được đặt
+
+Các giai đoạn cụ thể được mô tả như sau:
+•	Giai đoạn 1 - Redlock acquisition: RedlockManager.withLock() tạo một RLock từ ba node Redis (redis1, redis2, redis3) thông qua Redisson MultiLock. Phương thức tryLock(3, 10, TimeUnit.SECONDS) cố gắng lấy khóa với timeout chờ 3 giây và TTL 10 giây. Nếu đạt quorum 2/3 node Redis phản hồi thành công, khóa được coi là thành công.
+•	Giai đoạn 2 - Double-check với SELECT FOR UPDATE: Sau khi có khóa, hệ thống mở kết nối JDBC đến booking_db và thực thi SELECT status FROM seats WHERE show_id=? AND seat_id=? FOR UPDATE. Lệnh FOR UPDATE ngăn các giao dịch khác đọc hoặc ghi vào hàng này cho đến khi giao dịch hiện tại kết thúc, loại bỏ hoàn toàn khả năng dirty read hay phantom read.
+•	Giai đoạn 3 - Đăng ký 3 participant vào 2PC Coordinator: Nếu ghế còn AVAILABLE, ba Participant được tạo tương ứng với ba JDBC connection đến booking_db, payment_db và notif_db. Mỗi participant được gắn một SqlAction (lambda) chứa các câu lệnh SQL nghiệp vụ cần thực thi.
+•	Giai đoạn 4 - 2PC Phase 1 (PREPARE): TwoPhaseCommitCoordinator lần lượt gọi action.execute(conn) cho từng participant (thực thi INSERT/UPDATE nghiệp vụ), sau đó gửi PREPARE TRANSACTION 'txId' để đặt giao dịch vào trạng thái suspended. Nếu tất cả đều VOTE-YES, coordinator chuyển sang Phase 2.
+•	Giai đoạn 5 - 2PC Phase 2 (COMMIT): Coordinator gửi COMMIT PREPARED 'txId' đến từng participant. PostgreSQL thực sự ghi dữ liệu vào đĩa và giải phóng lock của giao dịch. Cuối cùng, Redlock được giải phóng và HTTP response JSON được trả về client.
+Toàn bộ quá trình trên, bao gồm cả 3 giây sleep nhân tạo trong sau khi xin khóa để biểu thị cho độ trễ ghi DB trong môi trường phân tán. Sau khi nhận kết quả thành công, người dùng nhấn 'Làm mới sơ đồ ghế' và thấy ghế vừa đặt chuyển sang màu đỏ (BOOKED) với mã userId được hiển thị.
+Nhật ký hệ thống ghi nhận đầy đủ từng bước:
+
+DB Booking sau khi được khách đặt vé thì đã chuyển sang trạng thái đã được đặt
+
+DB payment và DB noitify cũng đồng thời phải có dữ liệu để đảm bảo đặt được vé mà không cần thanh toán hay không có dữ liệu thông báo
+
+3.2.3. Kịch bản 2 - Tranh chấp đồng thời
+Chế độ race (mode=race) là kịch bản thực nghiệm quan trọng nhất, trực tiếp kiểm chứng khả năng phòng chống double booking. Khi BookingServlet nhận yêu cầu với mode=race, phương thức runRaceMode() được gọi, tạo một ExecutorService với hai luồng song song:
+•	Luồng A: BookingRequest của user 1001 cố gắng đặt ghế seatId được chỉ định.
+•	Luồng B: BookingRequest của user 1002 cố gắng đặt cùng ghế seatId đó, đồng thời với Luồng A.
+Cả hai luồng được submit vào thread pool và chạy gần như đồng thời. Cơ chế Redlock đảm bảo serialization: luồng nào gọi tryLock() trước và đạt quorum 2/3 Redis node trước sẽ giữ khóa trong tối đa 10 giây. Luồng còn lại phải chờ tối đa 3 giây (waitTime), sau đó nếu vẫn không lấy được khóa, tryLock() trả về false và booking bị từ chối ngay lập tức mà không cần truy vấn bất kỳ database nào.
+Đầu tiên chọn ghế đặt vé
+
+Khi gửi yêu cầu mô phỏng, hệ thống sẽ chạy 2 luồng để giả lập 2 người dùng cùng đặt vé 1 lúc và trả về kết quả
+
+Kết quả JSON trả về bao gồm thông tin của cả hai user:
+
+Log hệ thống trong race mode thể hiện rõ sự cạnh tranh và giải quyết xung đột:
+
+3.2.4. Kịch bản 3 - Đặt lại ghế đã dược đặt
+Kịch bản này kiểm tra tuyến phòng thủ thứ hai của hệ thống: SELECT FOR UPDATE. Giả sử Redlock không ngăn được (ví dụ trong trường hợp lý thuyết hai request đến trong cùng một chu kỳ clock), câu lệnh SELECT ... FOR UPDATE vẫn là hàng rào cuối cùng. Khi người dùng cố gắng đặt một ghế đã có status='BOOKED':
+•	Redlock được lấy thành công (ghế đã đặt không đồng nghĩa với khóa Redis còn tồn tại).
+•	SELECT FOR UPDATE đọc trạng thái ghế: status = 'BOOKED'.
+•	Phương thức isSeatAvailable() trả về false, hệ thống đóng tất cả connection và trả về BookingResult.fail("Ghế B05 đã được đặt") ngay lập tức.
+•	Không có bất kỳ thao tác INSERT hay PREPARE TRANSACTION nào được thực thi.
+Kết quả trả về phía client là JSON { success: false, message: 'Ghế B05 đã được đặt' }. Giao diện hiển thị thông báo lỗi rõ ràng và người dùng được hướng dẫn chọn ghế khác.
+Giả sử 2 người dùng có id 1001 và 1002 cùng truy cập trang web khi mà ghế A1 chưa được chọn, người dùng 1002 chọn ghế A1 và đặt vé cho ghế đó trước, trong khi người dùng có mã 1001 chưa chọn
+
+Người dùng 1001 vì chưa tải lại trang nên ghế vẫn chưa chuyển sang trạng thái đã được đặt
+
+Và khi người dùng 1001 bấm đặt vé, sẽ hiện trạng thái đã đặt và trả về lỗi
+
+3.3. Kết luận chương 3
+Chương 3 đã trình bày chi tiết hạ tầng kỹ thuật và kết quả thực nghiệm của hệ thống đặt vé phân tán được xây dựng dựa trên sự kết hợp của hai cơ chế cốt lõi: Redlock phân tán và giao thức Two-Phase Commit. Môi trường Docker Compose với tám container độc lập đã thành công mô phỏng kiến trúc phân tán đa cơ sở dữ liệu trong điều kiện kiểm soát tốt, cho phép quan sát và kiểm chứng hành vi của hệ thống trong cả trường hợp bình thường lẫn các tình huống lỗi.
+Các kịch bản thực nghiệm được thực hiện bao phủ toàn bộ các luồng quan trọng: đặt vé thành công, tranh chấp đồng thời (race condition), ghế đã đặt, Kết quả trong tất cả kịch bản đều khớp với hành vi mong đợi từ thiết kế lý thuyết, khẳng định tính đúng đắn của giải pháp.

@@ -60,7 +60,8 @@ def perform_ntp_sync(server_ip, node_id, fake_offset):
         data = sock.recv(4096).decode("utf-8")
 
         # T4: Thời gian Client nhận response
-        t4 = get_timestamp() + fake_offset
+        real_recv_time = time.time()       # thời gian OS thực (không có fake offset)
+        t4 = real_recv_time + fake_offset  # thời gian "Client thấy"
 
         response = json.loads(data)
         t2 = response["T2"]
@@ -77,8 +78,10 @@ def perform_ntp_sync(server_ip, node_id, fake_offset):
     delay = ((t2 - t1) + (t4 - t3)) / 2
     offset = ((t2 - t1) - (t4 - t3)) / 2
 
-    corrected_time = get_timestamp() + fake_offset + offset
-    server_time_now = get_timestamp()
+    corrected_time = time.time() + fake_offset + offset
+    # Ước tính thời gian server hiện tại từ T3 (dùng đồng hồ server, không dùng đồng hồ client bị lệch)
+    time_elapsed_since_recv = time.time() - real_recv_time
+    estimated_server_now = t3 + time_elapsed_since_recv
 
     print(f"\n--- KET QUA DONG BO NTP Node {node_id} ---")
     print(f"  T1 (Client gui) : {format_time(t1)}")
@@ -89,8 +92,8 @@ def perform_ntp_sync(server_ip, node_id, fake_offset):
     print(f"  Offset (θ)      : {offset:+.6f}s")
     print(f"  Truoc dong bo   : {format_time(t4)}")
     print(f"  Sau dong bo     : {format_time(corrected_time)}")
-    print(f"  Server Time     : {format_time(server_time_now)}")
-    print(f"  Sai lech con lai: {abs(corrected_time - server_time_now) * 1000:.3f}ms")
+    print(f"  Server Time (uo tinh): {format_time(estimated_server_now)}")
+    print(f"  Sai lech con lai: {abs(corrected_time - estimated_server_now) * 1000:.3f}ms")
     print(f"  Trang thai      : DA DONG BO\n")
 
     # Report cho Dashboard
@@ -104,8 +107,8 @@ def perform_ntp_sync(server_ip, node_id, fake_offset):
         "total_offset": total_offset,
         "before_sync": format_time(t4),
         "after_sync": format_time(corrected_time),
-        "server_time": format_time(server_time_now),
-        "remaining_error_ms": abs(corrected_time - server_time_now) * 1000,
+        "server_time": format_time(estimated_server_now),
+        "remaining_error_ms": abs(corrected_time - estimated_server_now) * 1000,
     })
 
     # Hiển thị thời gian đã hiệu chỉnh
